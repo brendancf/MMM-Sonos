@@ -1,143 +1,160 @@
-/* Magic Mirror 2
- * Module: MMM-Sonos
- *
- * By Christopher Fenner https://github.com/CFenner
- * Modified by Snille https://github.com/Snille
- * MIT Licensed.
- */
- Module.register('MMM-Sonos', {
-	defaults: {
-		showStoppedRoom: true,
-		showAlbumArt: true,
-		preRoomText: 'Zone: ',
-		preArtistText: 'Artist: ',
-		preTrackText: 'Track: ',
-		preTypeText: 'Source: ',
-		showRoomName: true,
-		animationSpeed: 1000,
-		updateInterval: 0.5, // every 0.5 minutes
-		apiBase: 'http://localhost',
-		apiPort: 5005,
-		apiEndpoint: 'zones',
- 		exclude: []
-	},
-	start: function() {
-		Log.info('Starting module: ' + this.name);
-		this.update();
-		// refresh every x minutes
-		setInterval(
-			this.update.bind(this),
-			this.config.updateInterval * 60 * 1000);
-	},
-	update: function(){
-		this.sendSocketNotification('SONOS_UPDATE',this.config.apiBase + ":" + this.config.apiPort + "/" + this.config.apiEndpoint);
-	},
-	render: function(data){
-		var text = '';
-		$.each(data, function (i, item) {
-			var room = '';
-			var isGroup = item.members.length > 1;
-			if(isGroup){
-				$.each(item.members, function (j, member) {
-					var isExcluded = this.config.exclude.indexOf(member.roomName) !== -1;
-					room += isExcluded?'':(member.roomName + ', ');
-				}.bind(this));
-				room = room.replace(/, $/,"");
-			}else{
-				room = item.coordinator.roomName;
-				var isExcluded = this.config.exclude.indexOf(room) !== -1;
-				room = isExcluded?'':room;
-			}
-			if(room !== ''){
-				var state = item.coordinator.state.playbackState;
-				var artist = item.coordinator.state.currentTrack.artist;
-				var track = item.coordinator.state.currentTrack.title;
-				var cover = item.coordinator.state.currentTrack.absoluteAlbumArtUri;
-//				var streamInfo = item.coordinator.state.currentTrack.streamInfo;
-				var type = item.coordinator.state.currentTrack.type;
-				var preroom = this.config.preRoomText;
-				var preartist = this.config.preArtistText;
-				var pretrack = this.config.preTrackText;
-				var pretype = this.config.preTypeText;
-				var prestream = this.config.preStreamText;
-				text += this.renderRoom(state, pretype, type, preroom, room, preartist, artist, pretrack, track, cover);
-			}
-		}.bind(this));
-		this.loaded = true;
-		// only update dom if content changed
-		if(this.dom !== text){
-			this.show();
-			this.dom = text;
-			this.updateDom(this.config.animationSpeed);
-		}
-		// Hide module if not playing.
-		if(text == ''){
-			this.hide(this.config.animationSpeed);
-		}
-	},
-	renderRoom: function(state, pretype, type, preroom, roomName, preartist, artist, pretrack, track, cover) {
-		artist = artist?artist:"";
-		track = track?track:"";
-		cover = cover?cover:"";
-		var room = '';
-		// show room name if 'showRoomName' is set and PLAYING or 'showStoppedRoom' is set
-		if(this.config.showRoomName && (state === 'PLAYING' || this.config.showStoppedRoom)) {
-			room += this.html.room.format(preroom, roomName);
-		}	
-		// if Sonos Playbar is in TV mode, no title is provided and therefore the room should not be displayed
-		var isEmpty = (artist && artist.trim().length) == 0
-			&& (track && track.trim().length) == 0
-			&& (cover && cover.trim().length) == 0;
-		// show song if PLAYING
-		if(state === 'PLAYING' && !isEmpty) {
-			room += this.html.type.format(pretype, type.charAt(0).toUpperCase() + type.slice(1));
-			room += this.html.song.format(
-				this.html.name.format(preartist, artist, pretrack, track)+
-				// show album art if 'showAlbumArt' is set
-				(this.config.showAlbumArt
-					?this.html.art.format(cover)
-					:''
-				)
-			);
-		}
-		return this.html.roomWrapper.format(room);
-	},
-	html: {
-		loading: '<div class="dimmed light small">Loading music ...</div>',
-		roomWrapper: '{0}',
-		room: '<div class="room xsmall">{0}{1}</div>',
-		song: '<div class="song">{0}</div>',
-		type: '<div class="type normal small">{0}{1}</div>',
-		name: '<div class="name normal small"><div>{0}{1}</div><div>{2}{3}</div></div>',
-		art: '<div class="art"><img src="{0}"/></div>',
-	},
-	capitalize: function() {
-		return this.charAt(0).toUpperCase() + this.slice(1);
-	},
-	getScripts: function() {
-		return [
-			'String.format.js',
-			'//cdnjs.cloudflare.com/ajax/libs/jquery/2.2.2/jquery.js'
-		];
-	},
-	getStyles: function() {
-		return ['sonos.css'];
-	},
-	getDom: function() {
-		var content = '';
-		if (!this.loaded) {
-			content = this.html.loading;
-		}else if(this.data.position.endsWith("left")){
-			content = '<ul class="flip">'+this.dom+'</ul>';
-		}else{
-			content = '<ul>'+this.dom+'</ul>';
-		}
-		return $('<div class="sonos">'+content+'</div>')[0];
-	},
-	socketNotificationReceived: function(notification, payload) {
-	if (notification === 'SONOS_DATA') {
-		//Log.info('received SONOS_DATA');
-		this.render(payload);
-      }
-  }
+Module.register('MMM-Sonos', {
+    defaults: {
+        animationSpeed: 1000,
+        showFullGroupName: false,
+        showArtist: true,
+        showAlbum: true,
+        showMetadata: true
+    },
+
+    items: {},
+
+    start: function() {
+        Log.log('Sonos frontend started');
+        this.sendSocketNotification('SONOS_START');
+    },
+
+    getStyles: function () {
+        return ['MMM-Sonos.css'];
+    },
+
+    getScripts: function() {
+        return [this.file('node_modules/feather-icons/dist/feather.min.js')];
+    },
+
+    socketNotificationReceived: function (id, payload) {
+        Log.log(`Notification received: ${id}`, payload);
+
+        switch (id) {
+            case 'SET_SONOS_GROUPS':
+                this.items = payload;
+                this.updateDom(this.config.animationSpeed);
+                break;
+            case 'SET_SONOS_CURRENT_TRACK':
+                if (this.items.hasOwnProperty(payload.group.ID)) {
+                    this.items[payload.group.ID] = {
+                        ...this.items[payload.group.ID],
+                        group: payload.group,
+                        track: payload.track
+                    };
+                    this.updateDom(this.config.animationSpeed);
+                }
+                break;
+            case 'SET_SONOS_VOLUME':
+                if (this.items.hasOwnProperty(payload.group.ID)) {
+                    this.items[payload.group.ID] = {
+                        ...this.items[payload.group.ID],
+                        group: payload.group,
+                        volume: payload.volume
+                    };
+                    this.updateDom();
+                }
+                break;
+            case 'SET_SONOS_MUTE':
+                if (this.items.hasOwnProperty(payload.group.ID)) {
+                    this.items[payload.group.ID] = {
+                        ...this.items[payload.group.ID],
+                        group: payload.group,
+                        isMuted: payload.isMuted
+                    };
+                    this.updateDom();
+                }
+                break;
+            case 'SET_SONOS_PLAY_STATE':
+                if (this.items.hasOwnProperty(payload.group.ID)) {
+                    this.items[payload.group.ID] = {
+                        ...this.items[payload.group.ID],
+                        group: payload.group,
+                        state: payload.state
+                    };
+                    this.updateDom(this.config.animationSpeed);
+                }
+                break;
+            default:
+                Log.info(`Notification with ID "${id}" unsupported. Ignoring...`);
+                break;
+        }
+    },
+
+    getHeader: function() {
+        if (this.data.header && Object.values(this.items).some(item => item.state === 'playing' && item.track)) {
+            return this.data.header;
+        }
+    },
+
+    getDom: function () {
+        if (Object.values(this.items).length === 0) {
+            return document.createElement('div');
+        }
+
+        const container = document.createElement('div');
+        container.className = 'sonos light';
+        container.append(...Object.values(this.items)
+            .filter(item => item.state === 'playing' && item.track)
+            .map(item => {
+                const container = document.createElement('div');
+                container.className = "groupContainer";
+
+                if (item.track.albumArtURI) {
+                    const albumArt = document.createElement('img');
+                    albumArt.className = "album-art";
+                    albumArt.src = item.track.albumArtURI
+                    container.append(albumArt)
+                }
+
+                const trackWrapper = document.createElement('span');
+                trackWrapper.className = 'trackWrapper';
+                container.append(trackWrapper);
+
+                const track = document.createElement('span');
+                track.className = 'track';
+                track.innerHTML  = `<strong class="bright ticker">${item.track.title}</strong>`;
+                trackWrapper.append(track);
+
+                const artist = [];
+                if (this.config.showArtist && item.track.artist) {
+                    artist.push(`<span class="bright">${item.track.artist}</span>`);
+                }
+                if (this.config.showAlbum && item.track.album) {
+                    artist.push(`${item.track.album}`);
+                }
+                if (artist.length > 0) {
+                    const artistElement = document.createElement('div');
+                    artistElement.className = 'artist small ticker';
+                    artistElement.innerHTML = artist.join('&nbsp;○&nbsp;');
+                    trackWrapper.append(artistElement);
+                }
+
+                if (this.config.showMetadata) {
+                    let volume;
+                    if (item.isMuted === true) {
+                        volume = `${this.getIcon('volume-x', 'dimmed')}`;
+                    } else {
+                        volume = `${this.getIcon(item.volume < 50 ? 'volume-1' : 'volume-2', 'dimmed')}&nbsp;<span>${item.volume}</span>`;
+                    }
+
+                    const groupName = this.config.showFullGroupName
+                        ? item.group.ZoneGroupMember.map(member => member.ZoneName).join(' + ')
+                        : item.group.Name;
+
+                    const metadata = document.createElement('div');
+                    metadata.className = 'metadata small normal';
+                    metadata.innerHTML =
+                        `<span>${this.getIcon('speaker', 'dimmed')}&nbsp;<span class="group-name ticker">${groupName}</span></span>` +
+                        '&nbsp;' +
+                        `<span>${volume}</span>` +
+                        '&nbsp;' +
+                        `<span>${this.getIcon('activity', 'dimmed')}&nbsp;<span>${Math.floor(item.track.duration / 60)}:${Math.ceil(item.track.duration % 60).toString().padStart(2, '0')}</span></span>`;
+                    container.append(metadata);
+                }
+
+                return container;
+            }));
+
+        return container;
+    },
+
+    getIcon: function(iconId, classes) {
+        return `<svg class="feather ${classes}"><use xlink:href="${this.file('node_modules/feather-icons/dist/feather-sprite.svg')}#${iconId}"/></svg>`;
+    }
 });
